@@ -272,6 +272,41 @@ Przykład faktury ze stawką "np":
 }
 ```
 
+### Transakcja trójstronna uproszczona (`triangular_transaction`)
+
+Pole `triangular_transaction` (boolean) oznacza wewnątrzwspólnotową transakcję trójstronną w procedurze uproszczonej — fakturę wystawianą przez drugiego w kolejności podatnika (art. 135 ust. 1 pkt 4 lit. b i c oraz ust. 2 ustawy o VAT; art. 141 dyrektywy 2006/112/WE). W strukturze KSeF odpowiada polu **P_23** w sekcji adnotacji.
+
+**Warunki uznania pola:** faktura krajowa (konto z locale PL), przychodowa, typu `vat` (lub korekta faktury VAT), oznaczona jako odwrotne obciążenie (`"reverse_charge": true`). Bez `"reverse_charge": true` pole jest ignorowane (ustawiane na `false`) — samo `triangular_transaction: true` nie włącza odwrotnego obciążenia.
+
+**Ustawiane automatycznie (nie trzeba ich przesyłać):** gdy pole zostanie uznane, system sam:
+- wymusza na wszystkich pozycjach stawkę `"np"` (nadpisuje przesłaną wartość),
+- ustawia `"np_tax_kind": "export_service"`,
+- dodaje oznaczenie procedury `"TT_D"` do `procedure_designations`.
+
+Przykład faktury z transakcją trójstronną:
+```json
+{
+  "invoice": {
+    "kind": "vat",
+    "reverse_charge": true,
+    "triangular_transaction": true,
+    "seller_name": "Moja Firma Sp. z o.o.",
+    "seller_tax_no": "5252445767",
+    "buyer_name": "Foreign Company Ltd",
+    "buyer_tax_no": "DE123456789",
+    "buyer_country": "DE",
+    "buyer_company": true,
+    "positions": [
+      {
+        "name": "Dostawa towarów w procedurze trójstronnej",
+        "quantity": 1,
+        "total_price_gross": 5000.00
+      }
+    ]
+  }
+}
+```
+
 ### Ograniczenia długości pól
 
 KSeF narzuca limity na długość niektórych pól:
