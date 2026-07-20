@@ -46,6 +46,7 @@ Działające przykłady wywołania API Fakturowni znajdują się też w w syste
     + [Odbiorcy/Wystawcy na fakturze](#f24)
     + [Uwagi na fakturze (descriptions)](#f25)
     + [Rozliczenia na fakturze (settlement_positions)](#f26)
+    + [Warunki transakcji KSeF FA(3) (delivery_terms, transaction_orders, ...)](#f27)
 + [Link do podglądu faktury i pobieranie do PDF](#view_url)
 + [Przykłady użycia  - zakup szkolenia](#use_case1)
 + [Faktury - specyfikacja, rodzaje pól, kody GTU](#invoices)
@@ -1349,6 +1350,213 @@ Obciążenia (`charge`) zwiększają kwotę do zapłaty, a odliczenia (`deductio
 ```
 kwota_do_zapłaty = price_gross + suma_obciążeń - suma_odliczeń
 ```
+
+<a name="f27"></a>
+
+## Warunki transakcji KSeF FA(3)
+
+Warunki transakcji to zestaw pól faktury odpowiadający węzłowi `WarunkiTransakcji` ze struktury logicznej faktury ustrukturyzowanej KSeF (schema FA(3)). Obejmuje **4 pola skalarne** oraz **3 listy** (umowy, zamówienia, numery partii towaru).
+
+> **Kompatybilność wsteczna:** Dotychczasowe pole `oid` (numer zamówienia) działa bez zmian. Nowe pola skalarne i listy są **dodatkowe** — integracje, które ich nie wysyłają, działają jak dotychczas, a integracje, które ignorują nieznane klucze w odpowiedzi JSON, nie wymagają żadnych zmian. Migrację `oid` → zamówienia opisano w sekcji [Kompatybilność wsteczna — pole `oid`](#f27_oid).
+
+### Pola skalarne
+
+Pola skalarne przekazuje się bezpośrednio w obiekcie `invoice` (jak np. `number` czy `sell_date`):
+
+| Pole | Typ | Opis |
+|------|-----|------|
+| `delivery_terms` | string (max 256) | Warunki dostawy (`WarunkiDostawy`). Można podać kod Incoterms 2020 lub dowolny własny opis (patrz niżej). |
+| `agreed_exchange_rate` | decimal (> 0, do 6 miejsc po przecinku) | Kurs umowny (`KursUmowny`) uzgodniony między stronami. Musi być podany **razem z** `agreed_currency`. |
+| `agreed_currency` | string (kod ISO 4217, wielkie litery) | Waluta umowna (`WalutaUmowna`), np. `EUR`, `USD`. **Nie może być `PLN`.** Musi być podana **razem z** `agreed_exchange_rate`. |
+| `intermediary_entity` | boolean | Podmiot pośredniczący (`PodmiotPośredniczący`) — dostawa dokonana przez podmiot, o którym mowa w art. 22 ust. 2d ustawy o VAT. |
+
+**Kody Incoterms 2020** akceptowane w polu `delivery_terms`:
+
+| Kod | Znaczenie |
+|-----|-----------|
+| `EXW` | EX Works (z zakładu) |
+| `FCA` | Free Carrier (dostarczone do przewoźnika) |
+| `CPT` | Carriage Paid To (przewóz opłacony do) |
+| `CIP` | Carriage and Insurance Paid To (przewóz i ubezpieczenie opłacone do) |
+| `DAP` | Delivered at Place (dostarczone do miejsca) |
+| `DPU` | Delivered at Place Unloaded (dostarczone do miejsca wyładowania) |
+| `DDP` | Delivered Duty Paid (dostarczone, cło opłacone) |
+
+Wartość spoza tej listy zostanie zapisana jako własny opis warunków dostawy. W odpowiedzi API zwracana jest dokładnie zapisana wartość (kod lub tekst — bez tłumaczenia na pełną nazwę).
+
+### Listy: umowy, zamówienia, numery partii towaru
+
+Trzy niezależne listy, każda przekazywana jako tablica obiektów w polu `invoice`:
+
+| Klucz w API | Węzeł KSeF | Pola wiersza | Limit wierszy |
+|-------------|-----------|--------------|---------------|
+| `transaction_contracts` | Umowy | `contract_number`, `contract_date` | 100 |
+| `transaction_orders` | Zamówienia | `order_number`, `order_date` | 100 |
+| `transaction_batches` | Numery partii towaru | `batch_number` | 1000 |
+
+Listy działają tak samo jak [uwagi (`descriptions`)](#f25) i [rozliczenia (`settlement_positions`)](#f26): wiersze bez `id` są tworzone, wiersze z `id` — aktualizowane, a wiersze z `id` i `_destroy: 1` — usuwane. Pole `row_number` (numer porządkowy) jest nadawane automatycznie na podstawie kolejności w tablicy — nie trzeba go przesyłać.
+
+### Pobieranie warunków transakcji
+
+Na kontach PL pola skalarne oraz 3 listy są **automatycznie** dołączane do odpowiedzi JSON faktury:
+
+```shell
+curl https://YOUR_DOMAIN.fakturownia.pl/invoices/INVOICE_ID.json?api_token=API_TOKEN
+```
+
+Przykładowa odpowiedź (fragment):
+```json
+{
+    "id": 123,
+    "kind": "vat",
+    "oid": "ZAM/182/2026",
+    "delivery_terms": "DDP",
+    "agreed_exchange_rate": "4.500000",
+    "agreed_currency": "EUR",
+    "intermediary_entity": true,
+    "transaction_contracts": [
+        {"id": 1, "contract_number": "UM/001/2026", "contract_date": "2026-02-01", "row_number": 1}
+    ],
+    "transaction_orders": [
+        {"id": 2, "order_number": "ZAM/182/2026", "order_date": "2026-02-15", "row_number": 1}
+    ],
+    "transaction_batches": [
+        {"id": 3, "batch_number": "PART/2026/001", "row_number": 1},
+        {"id": 4, "batch_number": "PART/2026/002", "row_number": 2}
+    ]
+}
+```
+
+Puste listy zwracane są jako `[]`, a niewypełnione pola skalarne jako `null`.
+
+### Dodawanie warunków transakcji przy tworzeniu faktury
+
+```shell
+curl https://YOUR_DOMAIN.fakturownia.pl/invoices.json \
+    -X POST \
+    -H 'Accept: application/json' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "api_token": "API_TOKEN",
+        "invoice": {
+            "kind": "vat",
+            "seller_name": "Wystawca Sp. z o.o.",
+            "buyer_name": "Klient1 Sp. z o.o.",
+            "positions": [
+                {"name": "Produkt 1", "quantity": 1, "tax": 23, "total_price_gross": 4500}
+            ],
+            "delivery_terms": "DDP",
+            "agreed_exchange_rate": "4.500000",
+            "agreed_currency": "EUR",
+            "intermediary_entity": true,
+            "transaction_contracts": [
+                {"contract_number": "UM/001/2026", "contract_date": "2026-02-01"}
+            ],
+            "transaction_orders": [
+                {"order_number": "ZAM/182/2026", "order_date": "2026-02-15"},
+                {"order_number": "ZAM/183/2026"}
+            ],
+            "transaction_batches": [
+                {"batch_number": "PART/2026/001"},
+                {"batch_number": "PART/2026/002"}
+            ]
+        }
+    }'
+```
+
+### Aktualizacja warunków transakcji
+
+Aby zaktualizować istniejący wiersz listy, podaj jego `id`; aby dodać nowy — pomiń `id`. Pola skalarne aktualizuje się przez zwykłe podanie nowej wartości:
+
+```shell
+curl https://YOUR_DOMAIN.fakturownia.pl/invoices/INVOICE_ID.json \
+    -X PUT \
+    -H 'Accept: application/json' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "api_token": "API_TOKEN",
+        "invoice": {
+            "delivery_terms": "FCA",
+            "transaction_orders": [
+                {"id": 2, "order_number": "ZAM/182/2026-POPR", "order_date": "2026-02-20"},
+                {"order_number": "ZAM/199/2026"}
+            ]
+        }
+    }'
+```
+
+### Usuwanie pozycji z list
+
+Aby usunąć wiersz listy, przekaż jego `id` z parametrem `_destroy: 1`:
+
+```shell
+curl https://YOUR_DOMAIN.fakturownia.pl/invoices/INVOICE_ID.json \
+    -X PUT \
+    -H 'Accept: application/json' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "api_token": "API_TOKEN",
+        "invoice": {
+            "transaction_orders": [
+                {"id": 2, "_destroy": 1}
+            ]
+        }
+    }'
+```
+
+Aby wyczyścić pole skalarne, prześlij dla niego wartość pustą (`null` lub `""`).
+
+### Pola wierszy list
+
+```
+Umowa (transaction_contracts):
+   "id": 1                          - identyfikator wiersza (wymagany przy aktualizacji i usuwaniu)
+   "contract_number": "UM/001/2026" - numer umowy (string, max 256 znaków)
+   "contract_date": "2026-02-01"    - data umowy (nie wcześniejsza niż 1990-01-01)
+   "row_number": 1                  - numer porządkowy, nadawany automatycznie
+   "_destroy": 1                    - oznaczenie do usunięcia (tylko przy aktualizacji)
+
+Zamówienie (transaction_orders):
+   "id": 2                          - identyfikator wiersza
+   "order_number": "ZAM/182/2026"   - numer zamówienia (string, max 256 znaków)
+   "order_date": "2026-02-15"       - data zamówienia (nie wcześniejsza niż 1990-01-01)
+   "row_number": 1
+   "_destroy": 1
+
+Numer partii towaru (transaction_batches):
+   "id": 3                          - identyfikator wiersza
+   "batch_number": "PART/2026/001"  - numer partii (string, max 256 znaków, wymagany)
+   "row_number": 1
+   "_destroy": 1
+```
+
+### Walidacje
+
+- `delivery_terms` — maksymalnie **256 znaków**.
+- `agreed_exchange_rate` — wartość liczbowa **większa od 0**.
+- `agreed_currency` — kod waluty ISO 4217 zapisany wielkimi literami (np. `EUR`, `USD`); **nie może być `PLN`** (KSeF wymaga waluty obcej).
+- `agreed_exchange_rate` i `agreed_currency` muszą być podane **razem** — podanie tylko jednego z nich zwróci błąd walidacji.
+- Wiersz `transaction_contracts` — musi mieć wypełnione **co najmniej jedno** z: `contract_number` lub `contract_date`. Wiersz z obydwoma pustymi jest ignorowany.
+- Wiersz `transaction_orders` — musi mieć wypełnione **co najmniej jedno** z: `order_number` lub `order_date`. Wiersz z obydwoma pustymi jest ignorowany.
+- Wiersz `transaction_batches` — pole `batch_number` jest **wymagane**. Wiersz z pustym `batch_number` jest ignorowany.
+- `contract_number` / `order_number` / `batch_number` — maksymalnie **256 znaków**.
+- `contract_date` / `order_date` — nie mogą być wcześniejsze niż **1990-01-01**.
+- Limity liczby wierszy: umowy — **100**, zamówienia — **100**, numery partii — **1000**.
+
+<a name="f27_oid"></a>
+
+### Kompatybilność wsteczna — pole `oid`
+
+Dotychczasowe pole `oid` (numer zamówienia, [opis w sekcji Faktury](#invoices)) pozostaje w pełni funkcjonalne — zapis, odczyt i wyszukiwanie faktur po `oid` działają jak dotychczas.
+
+Aby ułatwić migrację integracji, które przekazują numer zamówienia wyłącznie przez `oid`, wprowadzono jednokierunkowe przepisywanie `oid` → `transaction_orders`:
+
+- Działa **tylko dla żądań API**, gdy w ustawieniach konta włączona jest opcja *„Czy przepisywać stary Nr zamówienia (oid) do węzła Ksef: WarunkiTransakcji::Zamówienia::NrZamówienia"* (`show_po_number`).
+- Gdy przy tworzeniu/aktualizacji faktury przekażesz `oid`, a na fakturze nie ma jeszcze zamówienia o tym samym numerze, system automatycznie doda jeden wiersz `transaction_orders` z `order_number` równym `oid`.
+- Mechanizm jest **idempotentny** — ponowne wysłanie tego samego `oid` nie zduplikuje zamówienia.
+- Przepisywanie działa **wyłącznie w kierunku** `oid` → `transaction_orders`. Dodanie lub zmiana zamówień na liście nie modyfikuje pola `oid` — pozostaje ono niezależnym polem „legacy".
+
+Jeśli chcesz w pełni przejść na nowy węzeł, przekazuj dane bezpośrednio przez `transaction_orders`. Wyszukiwanie faktur po numerze zamówienia działa w obu przypadkach: gdy `oid` jest puste, wyszukiwarka używa numeru pierwszego zamówienia z listy `transaction_orders`.
 
 <a name="view_url"></a>
 
