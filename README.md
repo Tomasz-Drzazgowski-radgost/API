@@ -1357,6 +1357,8 @@ kwota_do_zapłaty = price_gross + suma_obciążeń - suma_odliczeń
 
 Warunki transakcji to zestaw pól faktury odpowiadający węzłowi `WarunkiTransakcji` ze struktury logicznej faktury ustrukturyzowanej KSeF (schema FA(3)). Obejmuje **4 pola skalarne** oraz **3 listy** (umowy, zamówienia, numery partii towaru).
 
+> **Uwaga:** Opcja *„Używaj sekcji «Warunki transakcji» na fakturach"* w ustawieniach konta steruje wyłącznie formularzem w aplikacji — API przyjmuje i zwraca te pola niezależnie od tego ustawienia.
+
 > **Kompatybilność wsteczna:** Dotychczasowe pole `oid` (numer zamówienia) działa bez zmian. Nowe pola skalarne i listy są **dodatkowe** — integracje, które ich nie wysyłają, działają jak dotychczas, a integracje, które ignorują nieznane klucze w odpowiedzi JSON, nie wymagają żadnych zmian. Migrację `oid` → zamówienia opisano w sekcji [Kompatybilność wsteczna — pole `oid`](#f27_oid).
 
 ### Pola skalarne
@@ -1366,7 +1368,7 @@ Pola skalarne przekazuje się bezpośrednio w obiekcie `invoice` (jak np. `numbe
 | Pole | Typ | Opis |
 |------|-----|------|
 | `delivery_terms` | string (max 256) | Warunki dostawy (`WarunkiDostawy`). Można podać kod Incoterms 2020 lub dowolny własny opis (patrz niżej). |
-| `agreed_exchange_rate` | decimal (> 0, do 6 miejsc po przecinku) | Kurs umowny (`KursUmowny`) uzgodniony między stronami. Musi być podany **razem z** `agreed_currency`. |
+| `agreed_exchange_rate` | decimal (> 0) | Kurs umowny (`KursUmowny`) uzgodniony między stronami. Zapisywany z dokładnością do 6 miejsc po przecinku (nadmiarowe cyfry są zaokrąglane). Musi być podany **razem z** `agreed_currency`. |
 | `agreed_currency` | string (kod ISO 4217, wielkie litery) | Waluta umowna (`WalutaUmowna`), np. `EUR`, `USD`. **Nie może być `PLN`.** Musi być podana **razem z** `agreed_exchange_rate`. |
 | `intermediary_entity` | boolean | Podmiot pośredniczący (`PodmiotPośredniczący`) — dostawa dokonana przez podmiot, o którym mowa w art. 22 ust. 2d ustawy o VAT. |
 
@@ -1411,7 +1413,7 @@ Przykładowa odpowiedź (fragment):
     "kind": "vat",
     "oid": "ZAM/182/2026",
     "delivery_terms": "DDP",
-    "agreed_exchange_rate": "4.500000",
+    "agreed_exchange_rate": "4.5",
     "agreed_currency": "EUR",
     "intermediary_entity": true,
     "transaction_contracts": [
@@ -1427,7 +1429,7 @@ Przykładowa odpowiedź (fragment):
 }
 ```
 
-Puste listy zwracane są jako `[]`, a niewypełnione pola skalarne jako `null`.
+Puste listy zwracane są jako `[]`, a niewypełnione pola skalarne jako `null`. Kurs (`agreed_exchange_rate`) zwracany jest bez zer końcowych (np. `4.5`, nie `4.500000`).
 
 ### Dodawanie warunków transakcji przy tworzeniu faktury
 
@@ -1552,11 +1554,13 @@ Dotychczasowe pole `oid` (numer zamówienia, [opis w sekcji Faktury](#invoices))
 Aby ułatwić migrację integracji, które przekazują numer zamówienia wyłącznie przez `oid`, wprowadzono jednokierunkowe przepisywanie `oid` → `transaction_orders`:
 
 - Działa **tylko dla żądań API**, gdy w ustawieniach konta włączona jest opcja *„Czy przepisywać stary Nr zamówienia (oid) do węzła Ksef: WarunkiTransakcji::Zamówienia::NrZamówienia"* (`show_po_number`).
-- Gdy przy tworzeniu/aktualizacji faktury przekażesz `oid`, a na fakturze nie ma jeszcze zamówienia o tym samym numerze, system automatycznie doda jeden wiersz `transaction_orders` z `order_number` równym `oid`.
-- Mechanizm jest **idempotentny** — ponowne wysłanie tego samego `oid` nie zduplikuje zamówienia.
+- Przepisanie następuje przy **każdym** zapisie faktury przez API (create/update), jeśli faktura ma wypełnione `oid` — także wtedy, gdy `oid` nie zostało przekazane w danym żądaniu (jest już zapisane na fakturze) — i nie istnieje jeszcze zamówienie o tym samym numerze. System dodaje wówczas jeden wiersz `transaction_orders` z `order_number` równym `oid`.
+- Mechanizm jest **idempotentny** — ponowne wysłanie tego samego `oid` nie zduplikuje zamówienia. Uwzględniane są także zamówienia usunięte: po skasowaniu wiersza przez `_destroy` ponowny zapis z tym samym `oid` nie utworzy go ponownie.
 - Przepisywanie działa **wyłącznie w kierunku** `oid` → `transaction_orders`. Dodanie lub zmiana zamówień na liście nie modyfikuje pola `oid` — pozostaje ono niezależnym polem „legacy".
 
 Jeśli chcesz w pełni przejść na nowy węzeł, przekazuj dane bezpośrednio przez `transaction_orders`. Wyszukiwanie faktur po numerze zamówienia działa w obu przypadkach: gdy `oid` jest puste, wyszukiwarka używa numeru pierwszego zamówienia z listy `transaction_orders`.
+
+> **Wydruk i korekty/duplikaty:** Faktura posiadająca zamówienia w warunkach transakcji nie pokazuje już na wydruku osobnej linii „Numer zamówienia" z pola `oid` (dane zamówień są prezentowane w sekcji Warunki transakcji). Przy wystawianiu korekty lub duplikatu warunki transakcji są kopiowane z faktury źródłowej — zbędne wiersze można usunąć przez `_destroy`.
 
 <a name="view_url"></a>
 
