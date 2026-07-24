@@ -1530,6 +1530,7 @@ Pola faktury
 "exempt_tax_kind": "", Podstawa zwolnienia z podatku VAT (stosowana, gdy pozycja ma tax="zw", wcześniej należy również włączyć opcję "Wybór podstawy zastosowania stawki zw (zwolnione z opodatkowania) na fakturze" w ustawieniach konta)
 "np_tax_kind": "", Podstawa zastosowania stawki NP (nie podlega) na fakturze
 "reverse_charge": false, Odwrotne obciążenie. Oznaczenie faktury jako 'Odwrotne obciążenie' spowoduje wymuszenie na pozycjach (positions) odpowiedniej stawki podatku (tax) w zależności od kraju nabywcy (buyer_country): 'oo' dla 'PL' lub 'np' w pozostałych przypadkach
+"triangular_transaction": false, Wewnątrzwspólnotowa transakcja trójstronna uproszczona (pole P_23 w KSeF; więcej informacji w KSeF.md)
 "corrected_content_before": "", Treść korygowana (pole ma zastosowanie dla faktur korygujących)
 "corrected_content_after": "", Treść prawidłowa (pole ma zastosowanie dla faktur korygujących)
 "accounting_note_kind": "credit" lub "debit", w zależności, czy Nota księgowa jest obciążąjąca czy uznaniowa (pole ma zastosowanie tylko dla not księgowych)
